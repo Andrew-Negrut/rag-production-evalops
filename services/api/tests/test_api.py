@@ -16,7 +16,8 @@ def create_test_tables():
     Create tables once for the SQLite test database.
     (In a more advanced setup, we'd run Alembic migrations here.)
     """
-    Base.metadata.create_all(bind=engine)
+    if engine.url.get_backend_name().startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
 
 
 @pytest.fixture()
