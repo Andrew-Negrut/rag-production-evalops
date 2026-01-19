@@ -221,7 +221,9 @@ def main() -> int:
                 continue
             key = _extract_doc_key(ex.query)
             if key and key in doc_id_by_title:
-                ex.target_document_ids = [doc_id_by_title[key]]
+                doc_id = doc_id_by_title.get(key)
+                if isinstance(doc_id, str):
+                    ex.target_document_ids = [doc_id]
 
     run_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     run_dir = os.path.join("runs", run_id)
