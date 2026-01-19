@@ -497,7 +497,7 @@ from prometheus_client import Histogram, Counter, generate_latest, CONTENT_TYPE_
 
 from app.chunking import chunk_text, chunk_pages
 from app.parsers.pdf import extract_pages_from_pdf_bytes, PdfExtractError
-from app.db import SessionLocal, Base, engine
+from app.db import SessionLocal, engine
 from app.models import Document, Chunk
 from app.search import rank_chunks
 from app.settings import get_settings
