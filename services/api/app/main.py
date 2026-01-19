@@ -497,7 +497,7 @@ from prometheus_client import Histogram, Counter, generate_latest, CONTENT_TYPE_
 
 from app.chunking import chunk_text, chunk_pages
 from app.parsers.pdf import extract_pages_from_pdf_bytes, PdfExtractError
-from app.db import SessionLocal
+from app.db import SessionLocal, Base, engine
 from app.models import Document, Chunk
 from app.search import rank_chunks
 from app.settings import get_settings
@@ -865,6 +865,9 @@ def metrics():
 def dev_reset():
     if os.environ.get("ENV") != "dev":
         raise HTTPException(status_code=404, detail="Not found")
+
+    # Ensure tables exist before attempting deletes (CI may start with empty DB).
+    Base.metadata.create_all(bind=engine)
 
     with SessionLocal() as db:
         db.execute(delete(Chunk))
