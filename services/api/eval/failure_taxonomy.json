@@ -1,0 +1,8 @@
+{
+  "retrieval_miss": "Target document not retrieved in top-k.",
+  "answerable_refusal": "Answerable question was refused.",
+  "answerable_no_citations": "Answerable question returned without citations.",
+  "unanswerable_non_refusal": "Unanswerable question did not refuse.",
+  "unanswerable_has_citations": "Unanswerable question returned citations.",
+  "citation_doc_mismatch": "Citations present but none match target documents."
+}

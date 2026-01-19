@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-test-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compose up (CI-safe: no OpenAI, no HF downloads, no reranker downloads)
+        run: |
+          export LLM_PROVIDER=fake
+          export EMBEDDING_MODEL=hash
+          export ENABLE_RERANK=false
+          export OPENAI_API_KEY=""
+          export PII_REDACT=true
+          docker compose up -d --build
+
+      - name: Wait for API health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              echo "API is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time"
+          docker compose logs api
+          exit 1
+
+      - name: Reset deterministically
+        run: |
+          curl -fsS -X POST http://localhost:8000/dev/reset
+
+      - name: Run pytest inside api container
+        run: |
+          docker compose exec -T api pytest -q
+
+      - name: Lint (ruff) + typecheck (mypy)
+        run: |
+          docker compose exec -T api pip install ruff mypy
+          docker compose exec -T api ruff check app
+          docker compose exec -T api mypy app --ignore-missing-imports --explicit-package-bases \
+            --disable-error-code=arg-type \
+            --disable-error-code=assignment \
+            --disable-error-code=index \
+            --disable-error-code=call-overload \
+            --disable-error-code=attr-defined \
+            --disable-error-code=import-untyped \
+            --disable-error-code=union-attr \
+            --disable-error-code=dict-item
+
+      - name: Security scans (pip-audit, bandit)
+        run: |
+          docker compose exec -T api pip install pip-audit bandit
+          docker compose exec -T api pip-audit
+          docker compose exec -T api bandit -r app -ll
+
+      - name: Smoke quality check (runtime doc, no committed PDFs)
+        run: |
+          set -euo pipefail
+
+          # 1) Upload a tiny runtime document
+          DOC_PAYLOAD='{
+            "title": "CI Tiny Doc",
+            "content": "Return policy: You can return items within 30 days with a receipt. Refunds are processed in 5 business days."
+          }'
+
+          curl -fsS -X POST http://localhost:8000/documents \
+            -H "Content-Type: application/json" \
+            -d "$DOC_PAYLOAD" >/dev/null
+
+          # 2) Ask a question that is answerable from the doc
+          ANSWER_PAYLOAD='{
+            "query": "What is the return window and how long do refunds take?",
+            "top_k": 5,
+            "include_meta": false
+          }'
+
+          RESP=$(curl -fsS -X POST http://localhost:8000/answer \
+            -H "Content-Type: application/json" \
+            -d "$ANSWER_PAYLOAD")
+
+          echo "$RESP" | python - <<'PY'
+          import json, sys
+
+          resp = json.load(sys.stdin)
+          ans = (resp.get("answer") or "").strip()
+          cits = resp.get("citations") or []
+          refusal_prefix = "I don't know based on the provided sources."
+
+          if ans.startswith(refusal_prefix):
+              raise SystemExit(f"Smoke failed: got refusal: {ans}")
+
+          if not isinstance(cits, list) or len(cits) < 1:
+              raise SystemExit(f"Smoke failed: expected citations >= 1, got: {cits}")
+
+          print("Smoke passed.")
+          print("Answer:", ans)
+          print("Citations:", cits)
+          PY
+
+      - name: Security suite (injection + exfil + PII)
+        run: |
+          export EVAL_BASE_URL=http://localhost:8000
+          python services/api/scripts/run_security_suite.py
+
+      - name: Upload security suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-suite
+          path: runs/security_*/**
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs

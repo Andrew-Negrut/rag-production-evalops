@@ -1,0 +1,23 @@
+chunking:
+  chunk_size: 800
+  overlap: 100
+
+retrieval_defaults:
+  top_k: 5
+  lexical_k: 20
+  vector_k: 20
+  candidates_k: 50
+  use_mmr: true
+  use_rerank: false
+  rrf_k: 60
+
+answer_defaults:
+  top_k: 5
+  lexical_k: 20
+  vector_k: 20
+  candidates_k: 50
+  use_mmr: false
+  use_rerank: true
+
+models:
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2

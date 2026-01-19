@@ -58,17 +58,24 @@ class VectorStore:
         query_vector: List[float],
         limit: int = 5,
         doc_ids: Optional[List[str]] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[qm.ScoredPoint]:
-        qfilter = None
+        must = []
         if doc_ids:
-            qfilter = qm.Filter(
-                must=[
-                    qm.FieldCondition(
-                        key="document_id",
-                        match=qm.MatchAny(any=doc_ids),
-                    )
-                ]
+            must.append(
+                qm.FieldCondition(
+                    key="document_id",
+                    match=qm.MatchAny(any=doc_ids),
+                )
             )
+        if tenant_id:
+            must.append(
+                qm.FieldCondition(
+                    key="tenant_id",
+                    match=qm.MatchValue(value=tenant_id),
+                )
+            )
+        qfilter = qm.Filter(must=must) if must else None
 
         return self.client.search(
             collection_name=self.collection,

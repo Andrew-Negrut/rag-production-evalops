@@ -35,6 +35,7 @@ tmp/
 
 
 services/api/runs/
+runs/
 
 
 services/api/supplements/*.pdf

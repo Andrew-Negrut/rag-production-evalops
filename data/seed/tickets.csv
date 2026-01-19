@@ -1,0 +1,3 @@
+id,category,subject,body
+T-1001,returns,Refund status,Customer asked about refund timing for a returned item.
+T-1002,shipping,Delivery window,Customer asked about standard delivery time.

@@ -18,10 +18,36 @@ class LLMProvider(Protocol):
 class FakeProvider:
     """
     Deterministic provider for tests + CI (no network, no API keys).
+
+    Strategy:
+    - Parse the SOURCES block produced by build_sources_block()
+    - Reuse a short span from source [1] so the answer is always grounded
+    - Always include [1] so citation plumbing is exercised
     """
     def generate(self, *, system: str, user: str, tools: Optional[List[dict]] = None) -> LLMResult:
-        # Always cite [1] so your citation plumbing is exercised.
-        return LLMResult(text="From the sources, Qdrant stores vectors for similarity search. [1]")
+        text = (user or "").strip()
+
+        # Try to extract the content of source [1]
+        src1 = ""
+        if "[1]" in text:
+            after = text.split("[1]", 1)[1]
+
+            # Stop at next source marker or USER QUESTION.
+            for stop in ("\n[2]", "\n[3]", "\n[4]", "\n[5]", "\nUSER QUESTION:"):
+                if stop in after:
+                    after = after.split(stop, 1)[0]
+                    break
+
+            src1 = after.strip()
+
+        if not src1:
+            # Fallback: still non-refusal + citation.
+            return LLMResult(text="The provided sources contain relevant information. [1]")
+
+        # Use a short snippet from source [1] as the "answer"
+        snippet = " ".join(src1.split())[:220].rstrip()
+        return LLMResult(text=f"{snippet} [1]")
+
 
 
 class OpenAIProvider:

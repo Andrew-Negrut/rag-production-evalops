@@ -1,6 +1,6 @@
 from typing import List, Dict, Any, Optional
 import re
-from sqlalchemy import select, func, text, bindparam
+from sqlalchemy import select, func, bindparam
 from app.models import Chunk
 
 # a small stoplist to remove fluff words that often break strict lexical matching
@@ -23,7 +23,13 @@ def _keywords(query: str) -> List[str]:
             out.append(t)
     return out
 
-def lexical_search(db, query: str, top_k: int = 10, doc_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+def lexical_search(
+    db,
+    query: str,
+    top_k: int = 10,
+    doc_ids: Optional[List[str]] = None,
+    tenant_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Primary: strict websearch_to_tsquery (fast + good for keyword-style queries)
     Fallback: OR query across extracted keywords (more forgiving for natural language)
@@ -45,6 +51,8 @@ def lexical_search(db, query: str, top_k: int = 10, doc_ids: Optional[List[str]]
 
     if doc_ids:
         stmt = stmt.where(Chunk.document_id.in_(doc_ids))
+    if tenant_id:
+        stmt = stmt.where(Chunk.meta["tenant_id"].astext == tenant_id)
 
     rows = db.execute(
         stmt.order_by(rank.desc()).limit(top_k)
@@ -85,6 +93,8 @@ def lexical_search(db, query: str, top_k: int = 10, doc_ids: Optional[List[str]]
 
     if doc_ids:
         stmt2 = stmt2.where(Chunk.document_id.in_(doc_ids))
+    if tenant_id:
+        stmt2 = stmt2.where(Chunk.meta["tenant_id"].astext == tenant_id)
 
     rows2 = db.execute(
         stmt2.order_by(rank_loose.desc()).limit(top_k),

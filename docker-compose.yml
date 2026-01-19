@@ -9,13 +9,20 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: chunks
-      EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
-      ENABLE_RERANK: "true"
-      RERANK_MODEL: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_NAME: rag-api
+      PYTHONPATH: /workspace
+
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
+      ENABLE_RERANK: "${ENABLE_RERANK:-true}"
+      RERANK_MODEL: "${RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
 
       LLM_PROVIDER: "${LLM_PROVIDER:-openai}"
       LLM_MODEL: "${LLM_MODEL:-gpt-5}"
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      CITATION_REQUIRED: "${CITATION_REQUIRED:-false}"
+      SIMULATE_NO_CITATIONS: "${SIMULATE_NO_CITATIONS:-false}"
+      PII_REDACT: "${PII_REDACT:-false}"
 
       HF_HOME: /tmp/hf
       SENTENCE_TRANSFORMERS_HOME: /tmp/hf/sentence_transformers
@@ -27,6 +34,7 @@ services:
         condition: service_started
     volumes:
       - ./services/api:/app
+      - ./:/workspace
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
       interval: 5s
@@ -49,12 +57,52 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
   qdrant:
     image: qdrant/qdrant:v1.11.3
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector.yml"]
+    ports:
+      - "4318:4318"
+    volumes:
+      - ./otel/otel-collector.yml:/etc/otel-collector.yml:ro
+    depends_on:
+      jaeger:
+        condition: service_started
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "14250:14250"
+      - "4317:4317"
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
 
 
 volumes:

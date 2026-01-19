@@ -1,7 +1,6 @@
 from sqlalchemy import Text, String, Integer, ForeignKey, Column, Computed, Index
 from sqlalchemy import text
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import TSVECTOR, JSONB
 from app.db import Base
 

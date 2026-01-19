@@ -5,10 +5,14 @@ import os
 import sys
 import time
 import uuid
+import hashlib
+import subprocess
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
+import httpx
+from datetime import datetime, timezone
+
 
 
 DEFAULT_BASE_URL = os.environ.get("EVAL_BASE_URL", "http://localhost:8000")
@@ -37,23 +41,71 @@ ANSWER_PAYLOAD_DEFAULTS = {
 
 REFUSAL_PREFIX = "I don't know based on the provided sources."
 
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _get_git_sha() -> str:
+    # Prefer CI env var (works inside Docker/CI even if .git isn't present)
+    sha = os.environ.get("GITHUB_SHA") or os.environ.get("GIT_SHA")
+    if sha:
+        return sha.strip()
+
+    # Fallback: try git
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
+        return out.decode("utf-8").strip()
+    except Exception:
+        return "unknown"
+
+
+def _is_git_dirty() -> bool:
+    # Optional override for CI/container builds
+    dirty_env = os.environ.get("GIT_DIRTY")
+    if dirty_env is not None:
+        return dirty_env.strip().lower() in ("1", "true", "yes")
+
+    try:
+        out = subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL)
+        return bool(out.decode("utf-8").strip())
+    except Exception:
+        # If we cannot determine, default to False (but SHA may be "unknown")
+        return False
+
 
 def _http_json(method: str, url: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    data = None
-    headers = {"Content-Type": "application/json"}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-
-    req = Request(url=url, method=method.upper(), data=data, headers=headers)
     try:
-        with urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {e.code} calling {url}: {body}") from e
-    except URLError as e:
+        with httpx.Client(timeout=60) as client:
+            resp = client.request(method.upper(), url, json=payload)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"HTTP {e.response.status_code} calling {url}: {e.response.text}") from e
+    except httpx.RequestError as e:
         raise RuntimeError(f"Failed to call {url}: {e}") from e
+
+
+_DOC_KEY_RE = re.compile(r"^In\s+([A-Za-z0-9_]+)\b")
+
+
+def _fetch_documents(base_url: str) -> List[Dict[str, Any]]:
+    try:
+        with httpx.Client(timeout=20) as client:
+            resp = client.get(f"{base_url}/documents")
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _extract_doc_key(query: str) -> Optional[str]:
+    m = _DOC_KEY_RE.match((query or "").strip())
+    return m.group(1) if m else None
 
 
 @dataclass
@@ -112,21 +164,72 @@ def _citation_doc_precision(citations: List[Dict[str, Any]], targets: List[str])
     return (correct / total if total else 1.0, correct, total)
 
 
+def _load_failure_taxonomy() -> Dict[str, str]:
+    here = os.path.dirname(__file__)
+    path = os.path.abspath(os.path.join(here, "..", "..", "eval", "failure_taxonomy.json"))
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _classify_failure(
+    ex: GoldenExample,
+    hit: bool,
+    is_refusal: bool,
+    citations_total: int,
+    citations_correct: int,
+) -> str:
+    if not hit:
+        return "retrieval_miss"
+    if ex.answerable:
+        if is_refusal:
+            return "answerable_refusal"
+        if citations_total < 1:
+            return "answerable_no_citations"
+        if citations_total > 0 and citations_correct == 0:
+            return "citation_doc_mismatch"
+    else:
+        if not is_refusal:
+            return "unanswerable_non_refusal"
+        if citations_total > 0:
+            return "unanswerable_has_citations"
+    return "unknown"
+
+
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python -m services.api.eval.run_route1 eval/golden.route1.jsonl [base_url]")
+        print("Usage: python -m app.eval.run_route1 eval/golden.route1.jsonl [base_url]")
         return 2
 
     dataset_path = sys.argv[1]
     base_url = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_BASE_URL
 
     examples = _load_jsonl(dataset_path)
+    docs = _fetch_documents(base_url)
+    doc_id_by_title = {
+        d.get("title"): d.get("id")
+        for d in docs
+        if isinstance(d, dict) and d.get("title") and d.get("id")
+    }
+    if doc_id_by_title:
+        current_ids = set(doc_id_by_title.values())
+        for ex in examples:
+            if any(tid in current_ids for tid in ex.target_document_ids):
+                continue
+            key = _extract_doc_key(ex.query)
+            if key and key in doc_id_by_title:
+                ex.target_document_ids = [doc_id_by_title[key]]
 
     run_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
     run_dir = os.path.join("runs", run_id)
     os.makedirs(run_dir, exist_ok=True)
 
     failures: List[Dict[str, Any]] = []
+    failure_taxonomy = _load_failure_taxonomy()
+    failure_counts: Dict[str, int] = {}
 
     # Aggregates
     n = 0
@@ -197,6 +300,14 @@ def main() -> int:
         if ok:
             answer_correct_behavior += 1
         else:
+            failure_type = _classify_failure(
+                ex,
+                hit=hit,
+                is_refusal=is_refusal,
+                citations_total=total_c,
+                citations_correct=correct_c,
+            )
+            failure_counts[failure_type] = failure_counts.get(failure_type, 0) + 1
             failures.append(
                 {
                     "id": ex.id,
@@ -209,6 +320,7 @@ def main() -> int:
                     "citations_total": total_c,
                     "citations_correct_doc": correct_c,
                     "citation_precision": prec,
+                    "failure_type": failure_type,
                     "answer_preview": answer_text[:240],
                 }
             )
@@ -248,9 +360,31 @@ def main() -> int:
     with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
+    manifest = {
+        "run_id": run_id,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "git_sha": _get_git_sha(),
+        "dirty_git_tree": _is_git_dirty(),
+        "dataset_path": dataset_path,
+        "dataset_sha256": _sha256_file(dataset_path),
+        "base_url": base_url,
+        "retrieve_payload_defaults": RETRIEVE_PAYLOAD_DEFAULTS,
+        "answer_payload_defaults": ANSWER_PAYLOAD_DEFAULTS,
+        "key_metrics": {
+            "n_examples": metrics["n_examples"],
+            "retrieval_target_doc_recall@k": metrics["retrieval_target_doc_recall@k"],
+            "answer_behavior_accuracy": metrics["answer_behavior_accuracy"],
+            "avg_citation_doc_precision": metrics["avg_citation_doc_precision"],
+            "refusal_accuracy_on_unanswerable": metrics["refusal_accuracy_on_unanswerable"],
+        },
+    }
+
+    with open(os.path.join(run_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
     # simple markdown report
     report_lines = []
-    report_lines.append(f"# Route 1 Eval Report\n")
+    report_lines.append("# Route 1 Eval Report\n")
     report_lines.append(f"- run_id: `{run_id}`")
     report_lines.append(f"- base_url: `{base_url}`")
     report_lines.append(f"- dataset: `{dataset_path}`")
@@ -279,9 +413,40 @@ def main() -> int:
     with open(os.path.join(run_dir, "failures.json"), "w", encoding="utf-8") as f:
         json.dump(failures, f, indent=2)
 
+    failure_gallery = {
+        "run_id": run_id,
+        "dataset": dataset_path,
+        "taxonomy": failure_taxonomy,
+        "counts": failure_counts,
+        "failures": failures,
+    }
+    with open(os.path.join(run_dir, "failure_gallery.json"), "w", encoding="utf-8") as f:
+        json.dump(failure_gallery, f, indent=2)
+
+    gallery_lines = ["# Failure Gallery"]
+    gallery_lines.append(f"- run_id: `{run_id}`")
+    gallery_lines.append(f"- dataset: `{dataset_path}`")
+    gallery_lines.append("")
+    gallery_lines.append("## Failure counts")
+    for k in sorted(failure_counts.keys()):
+        desc = failure_taxonomy.get(k, "")
+        suffix = f" — {desc}" if desc else ""
+        gallery_lines.append(f"- **{k}**: {failure_counts[k]}{suffix}")
+    gallery_lines.append("")
+    gallery_lines.append("## Failures")
+    for fitem in failures:
+        gallery_lines.append(
+            f"- `{fitem['id']}` [{fitem['category']}] {fitem['failure_type']} :: {fitem['answer_preview']}"
+        )
+    with open(os.path.join(run_dir, "failure_gallery.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(gallery_lines))
+
     print(f"[eval] wrote {run_dir}/metrics.json")
     print(f"[eval] wrote {run_dir}/report.md")
     print(f"[eval] wrote {run_dir}/failures.json")
+    print(f"[eval] wrote {run_dir}/failure_gallery.json")
+    print(f"[eval] wrote {run_dir}/failure_gallery.md")
+    print(f"[eval] wrote {run_dir}/manifest.json")
     return 0
 
 
