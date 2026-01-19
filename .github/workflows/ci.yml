@@ -100,10 +100,10 @@ jobs:
               -d "$ANSWER_PAYLOAD" || true)
 
             if [ -n "$RESP" ]; then
-              if echo "$RESP" | python - <<'PY'
-          import json, sys
+              if RESP="$RESP" python - <<'PY'
+          import json, os
 
-          resp = json.load(sys.stdin)
+          resp = json.loads(os.environ.get("RESP", ""))
           ans = (resp.get("answer") or "").strip()
           cits = resp.get("citations") or []
           refusal_prefix = "I don't know based on the provided sources."
