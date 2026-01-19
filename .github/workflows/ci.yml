@@ -38,7 +38,15 @@ jobs:
 
       - name: Reset deterministically
         run: |
-          curl -fsS -X POST http://localhost:8000/dev/reset
+          for i in {1..30}; do
+            if curl -fsS -X POST http://localhost:8000/dev/reset >/dev/null; then
+              echo "Reset ok"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Reset failed after retries"
+          exit 1
 
       - name: Run pytest inside api container
         run: |
