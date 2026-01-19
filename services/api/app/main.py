@@ -486,7 +486,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Response, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, inspect
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -866,13 +866,16 @@ def dev_reset():
     if os.environ.get("ENV") != "dev":
         raise HTTPException(status_code=404, detail="Not found")
 
-    # Ensure tables exist before attempting deletes (CI may start with empty DB).
-    Base.metadata.create_all(bind=engine)
-
-    with SessionLocal() as db:
-        db.execute(delete(Chunk))
-        db.execute(delete(Document))
-        db.commit()
+    inspector = inspect(engine)
+    has_documents = inspector.has_table("documents")
+    has_chunks = inspector.has_table("chunks")
+    if has_chunks or has_documents:
+        with SessionLocal() as db:
+            if has_chunks:
+                db.execute(delete(Chunk))
+            if has_documents:
+                db.execute(delete(Document))
+            db.commit()
 
     # IMPORTANT: also reset Qdrant so tests/dev runs are deterministic.
     vstore.reset_collection(vector_size=embedder.dim())
