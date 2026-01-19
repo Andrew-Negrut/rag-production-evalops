@@ -93,11 +93,14 @@ jobs:
             "include_meta": false
           }'
 
-          RESP=$(curl -fsS -X POST http://localhost:8000/answer \
-            -H "Content-Type: application/json" \
-            -d "$ANSWER_PAYLOAD")
+          ok=0
+          for i in {1..5}; do
+            RESP=$(curl -fsS -X POST http://localhost:8000/answer \
+              -H "Content-Type: application/json" \
+              -d "$ANSWER_PAYLOAD" || true)
 
-          echo "$RESP" | python - <<'PY'
+            if [ -n "$RESP" ]; then
+              if echo "$RESP" | python - <<'PY'
           import json, sys
 
           resp = json.load(sys.stdin)
@@ -115,6 +118,20 @@ jobs:
           print("Answer:", ans)
           print("Citations:", cits)
           PY
+              then
+                ok=1
+                break
+              fi
+            fi
+
+            sleep 2
+          done
+
+          if [ "$ok" -ne 1 ]; then
+            echo "Smoke failed: empty or invalid JSON response from /answer"
+            echo "Last response: ${RESP:-<empty>}"
+            exit 1
+          fi
 
       - name: Security suite (injection + exfil + PII)
         run: |
