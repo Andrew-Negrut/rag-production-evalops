@@ -11,8 +11,13 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 
+ARG INSTALL_EXTRAS=""
 # Install as editable package (so imports work cleanly)
-RUN pip install --no-cache-dir -e .
+RUN if [ -n "$INSTALL_EXTRAS" ]; then \
+        pip install --no-cache-dir -e ".[${INSTALL_EXTRAS}]"; \
+    else \
+        pip install --no-cache-dir -e .; \
+    fi
 
 # Copy tests (not required for runtime, but useful for CI)
 COPY tests ./tests

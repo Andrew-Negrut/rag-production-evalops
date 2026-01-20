@@ -1,6 +1,9 @@
 services:
   api:
-    build: ./services/api
+    build:
+      context: ./services/api
+      args:
+        INSTALL_EXTRAS: "${INSTALL_EXTRAS:-ml}"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"

@@ -19,6 +19,7 @@ jobs:
           export LLM_PROVIDER=fake
           export EMBEDDING_MODEL=hash
           export ENABLE_RERANK=false
+          export INSTALL_EXTRAS=""
           export OPENAI_API_KEY=""
           export PII_REDACT=true
           docker compose up -d --build
