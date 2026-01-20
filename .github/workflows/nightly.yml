@@ -1,0 +1,56 @@
+name: Nightly Eval
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  full-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: "Compose up (CI-safe: no OpenAI, no HF downloads)"
+        run: |
+          export LLM_PROVIDER=fake
+          export EMBEDDING_MODEL=hash
+          export ENABLE_RERANK=false
+          export OPENAI_API_KEY=""
+          export PII_REDACT=true
+          docker compose up -d --build
+
+      - name: Wait for API health
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8000/health >/dev/null; then
+              echo "API is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not become healthy in time"
+          docker compose logs api
+          exit 1
+
+      - name: Reset and rebuild deterministically
+        run: |
+          docker compose exec -T api python services/api/rebuild_index.py --source data/seed
+
+      - name: Run full eval
+        run: |
+          docker compose exec -T api python services/api/app/eval/run_route1.py services/api/eval/golden.route1.jsonl
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval
+          path: runs/**
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs
