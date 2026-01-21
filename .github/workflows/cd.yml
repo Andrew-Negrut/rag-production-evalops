@@ -101,16 +101,20 @@ jobs:
           ANSWER_PAYLOAD='{
             "query": "What is the return window and how long do refunds take?",
             "top_k": 5,
-            "include_meta": false
+            "include_meta": false,
+            "use_rerank": false,
+            "use_mmr": false
           }'
 
           ok=0
           for i in {1..5}; do
-            RESP=$(curl -fsS -X POST http://localhost:8000/answer \
+            RESP=$(curl -sS -X POST http://localhost:8000/answer \
               -H "Content-Type: application/json" \
-              -d "$ANSWER_PAYLOAD" || true)
-            if [ -n "$RESP" ]; then
-              if RESP="$RESP" python - <<'PY'
+              -d "$ANSWER_PAYLOAD" -w "\n%{http_code}" || true)
+            BODY=$(echo "$RESP" | head -n -1)
+            CODE=$(echo "$RESP" | tail -n 1)
+            if [ "$CODE" = "200" ] && [ -n "$BODY" ]; then
+              if RESP="$BODY" python - <<'PY'
           import json, os
           resp = json.loads(os.environ.get("RESP", ""))
           ans = (resp.get("answer") or "").strip()
@@ -128,6 +132,10 @@ jobs:
                 ok=1
                 break
               fi
+            fi
+            if [ "$CODE" != "200" ]; then
+              echo "Smoke failed: /answer returned HTTP $CODE"
+              echo "Body: ${BODY:-<empty>}"
             fi
             sleep 2
           done
