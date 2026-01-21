@@ -37,6 +37,10 @@ jobs:
           docker compose logs api
           exit 1
 
+      - name: Apply migrations
+        run: |
+          docker compose exec -T api alembic upgrade head
+
       - name: Reset and rebuild deterministically
         run: |
           docker compose exec -T api python services/api/rebuild_index.py --source data/seed
