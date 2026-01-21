@@ -1,8 +1,17 @@
 from typing import List, Dict, Any
-from sentence_transformers import CrossEncoder
+
+try:
+    from sentence_transformers import CrossEncoder  # type: ignore
+except Exception:
+    CrossEncoder = None  # type: ignore
 
 class Reranker:
     def __init__(self, model_name: str):
+        if CrossEncoder is None:
+            raise RuntimeError(
+                "sentence-transformers is not available, but reranking was enabled. "
+                "Install the ml extra or set ENABLE_RERANK=false."
+            )
         self.model = CrossEncoder(model_name)
 
     def rerank(self, query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
