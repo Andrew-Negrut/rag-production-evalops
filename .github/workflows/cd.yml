@@ -94,9 +94,16 @@ jobs:
             "title": "CD Tiny Doc",
             "content": "Return policy: You can return items within 30 days with a receipt. Refunds are processed in 5 business days."
           }'
-          curl -fsS -X POST http://localhost:8000/documents \
+          DOC_RESP=$(curl -sS -X POST http://localhost:8000/documents \
             -H "Content-Type: application/json" \
-            -d "$DOC_PAYLOAD" >/dev/null
+            -d "$DOC_PAYLOAD" -w "\n%{http_code}" || true)
+          DOC_BODY=$(echo "$DOC_RESP" | head -n -1)
+          DOC_CODE=$(echo "$DOC_RESP" | tail -n 1)
+          if [ "$DOC_CODE" != "200" ] && [ "$DOC_CODE" != "201" ]; then
+            echo "Smoke failed: /documents returned HTTP $DOC_CODE"
+            echo "Body: ${DOC_BODY:-<empty>}"
+            exit 1
+          fi
 
           ANSWER_PAYLOAD='{
             "query": "What is the return window and how long do refunds take?",
