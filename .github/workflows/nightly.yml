@@ -43,11 +43,11 @@ jobs:
 
       - name: Reset and rebuild deterministically
         run: |
-          docker compose exec -T api python services/api/rebuild_index.py --source data/seed
+          docker compose exec -T api python /app/rebuild_index.py --source /workspace/data/seed
 
       - name: Run full eval
         run: |
-          docker compose exec -T api python services/api/app/eval/run_route1.py services/api/eval/golden.route1.jsonl
+          docker compose exec -T api python /app/app/eval/run_route1.py /app/eval/golden.route1.jsonl
 
       - name: Upload eval artifacts
         if: always()
@@ -59,3 +59,4 @@ jobs:
       - name: Compose logs on failure
         if: failure()
         run: docker compose logs
+

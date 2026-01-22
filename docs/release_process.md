@@ -20,3 +20,4 @@
 
 ## Nightly eval
 - Nightly workflow rebuilds the index from `data/seed`, runs full eval, and uploads artifacts.
+
